@@ -1,0 +1,158 @@
+Correct file for SOAP XML >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+-----------------------------------------------------------------------------------------------------------------------
+NPM Packages Required :-                  npm i express nodemon mssql xmlbuilder
+-----------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------- SERVER.js --------------------------------------------------------
+const express = require('express');
+const sql = require('mssql');
+const builder = require('xmlbuilder');
+const dbOperation = require('D:/SOAP Learnings/dbOperation.js');
+
+const app = express();
+const PORT = 3000;
+
+//------------------ Define a map of valid username-password pairs for authentication
+const validCredentials = {
+  admin: 'admin',
+  ram: '123',
+};
+
+//-------------------------------------- Converting Data to XML format 
+function convertToXML(data) {
+  function convertObjectToXML(obj) {
+    let xml = "";
+    for (const key in obj) {
+      if (Array.isArray(obj[key])) {
+        for (const item of obj[key]) {
+          xml += `<${key}>${convertObjectToXML(item)}</${key}>`;
+        }
+      } else if (typeof obj[key] === "object") {
+        xml += `<${key}>${convertObjectToXML(obj[key])}</${key}>`;
+      } else {
+        xml += `<${key}>${obj[key]}</${key}>`;
+      }
+    }
+    return xml;
+  }
+
+  let xml = "";
+  for (const item of data) {
+    xml += convertObjectToXML(item);
+  }
+
+  //------------------------------------ Format for SOAP XML determined here
+  const soapXML = builder
+    .create(
+      {
+        'soapenv:Envelope': {
+          '@xmlns:soapenv': 'http://schemas.xmlsoap.org/soap/envelope/',
+        },
+      },
+      { version: '1.0', encoding: 'UTF-8' }
+    )
+    .ele('soap:Body')
+    .ele('Response')
+    .raw(xml)
+    .end({ pretty: true });
+
+  return soapXML;
+}
+
+//------------------------------------- Authentication middleware
+function authenticate(req, res, next) {
+  const { username, password } = req.query;
+
+  // Verify the credentials
+  if (!username || !password || !validCredentials[username] || validCredentials[username] !== password) {
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
+  }
+
+  // Valid credentials, continue to the next middleware
+  next();
+}
+
+app.use(express.json());
+
+// --------------------------------- / -------------------------------
+app.get('/', (req, res) => {
+  res.send('Welcome, Guys!!!');
+});
+
+// --------------------------------- /DATA -------------------------------
+app.get('/data', authenticate, async (req, res) => {
+  try {
+    const result = await dbOperation.getSOAPData();
+    const data = result.recordset; // Assuming the data is in the 'recordset' property
+
+    if (!data || data.length === 0) {
+      res.status(404).json({ error: 'No data found' });
+      return;
+    }
+
+    const acceptHeader = req.get('Content-Type');
+    const isSoapRequested = acceptHeader && acceptHeader.includes('application/soap+xml');
+
+    if (isSoapRequested) {
+      const soapXML = convertToXML(data);
+
+      // Set the response content-type to SOAP XML
+      res.set('Content-Type', 'application/soap+xml');
+      res.send(soapXML);
+    } else {
+      res.json(data);
+    }
+
+    console.log(data);
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: 'Internal server error for data' });
+  }
+});
+
+// ---------------------------------- PORT ------------------------------
+app.listen(PORT, () => {
+  console.log(`Listening on port ${PORT}`);
+});
+
+-------------------------------------------------------- dbOperation.js -----------------------------------------
+const sql = require('mssql');
+const config = require('./dbConfig');
+
+const sqlQuery = 'SELECT * FROM SOAPTABLE';
+
+const getSOAPData = async () => {
+     try {
+          let pool = await sql.connect(config);
+          const result = await pool
+               .request()
+               .query(sqlQuery);
+          console.log("getSOAPData = ", result);
+          return result;
+     } catch (error) {
+          console.log(error);
+          throw new Error('Failed to get getSOAPData');
+     }
+};
+
+module.exports = {
+     sql,
+     getSOAPData,
+}
+-------------------------------------------------------- dbConfig.js ------------------------------------------------
+const config = {
+     user: 'ConnectWithRam',
+     password: '123',
+     server: 'RAM',
+     database: 'SOAP',
+     options: {
+          trustServerCertificate: true,
+          enableArithAbort: true,
+          instancename: 'SQLEXPRESS'
+     },
+     port: 1433
+};
+
+module.exports = config;
+-----------------------------------------------------------------------------------------------------------------------
